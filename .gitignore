@@ -1,3 +1,5 @@
 node_modules/
 .local/
 .env
+.omx/
+.DS_Store
