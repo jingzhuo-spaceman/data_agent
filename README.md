@@ -21,7 +21,7 @@
 ## 前置条件
 
 - Node.js 22 或更高版本。
-- 不需要安装第三方 npm 依赖。
+- `npm install` 会安装 PostgreSQL 驱动与 Mem0 Platform SDK。
 
 ## 验证
 
@@ -56,6 +56,9 @@ export APP_ENV=development
 export MODEL_API_KEY='your-provider-api-key'
 export MODEL_BASE_URL='https://api.deepseek.com'
 export MODEL_NAME='deepseek-chat'
+# Optional: enable Mem0 Platform for long-term memory extraction and semantic recall.
+export MEMORY_PROVIDER='mem0'
+export MEM0_API_KEY='your-mem0-platform-api-key'
 npm run migrate
 npm run seed:dev
 npm start
@@ -63,13 +66,19 @@ npm start
 
 服务默认仅监听 `127.0.0.1:3000`。浏览器打开 `http://127.0.0.1:3000` 可输入问题；`POST /api/agent/messages` 会依次执行当前租户的记忆检索、提示词组装和模型请求，并持久化 Turn/Step 事件。该输入接口仅在 `APP_ENV=development` 下可用，不能替代生产认证或用户数据 API。
 
-`npm run seed:dev` 会幂等创建三个开发租户：Alice、Bob、Carol。聊天页右上角的租户选择器会在这三个隔离空间间切换；会话与记忆已写入 PostgreSQL，而不是进程内存。
+`npm run seed:dev` 会幂等创建三个开发租户：Alice、Bob、Carol。聊天页右上角的租户选择器会在这三个隔离空间间切换；会话和审计事件始终写入 PostgreSQL。未配置 Mem0 时，应用继续从 PostgreSQL 检索旧记忆；配置 `MEMORY_PROVIDER=mem0` 与 `MEM0_API_KEY` 后，长期记忆的提取和语义检索改由 Mem0 Platform 处理。
 
 聊天页左侧会显示当前租户拥有的历史会话。刷新页面后，应用通过 `GET /api/agent/sessions` 加载会话列表，并通过 `GET /api/agent/sessions/{sessionId}/events` 回放用户和助手消息；两个接口均按当前租户和主体检查 Session 归属。
 
 `npm start`、`npm run migrate` 与 `npm run seed:dev` 会通过 Node 原生 `--env-file-if-exists=.env` 自动加载 `.env`。该文件已经被 `.gitignore` 排除；不要把它提交到版本控制。
 
 `MODEL_BASE_URL` 接受 OpenAI 兼容的 Chat Completions 服务。DeepSeek 官方示例使用 `https://api.deepseek.com` 作为 base URL，`deepseek-chat` 作为模型名；请求发送至 `/chat/completions`。未设置 `MODEL_NAME` 时，应用默认使用 `deepseek-chat`；其他提供商应显式设置它。[DeepSeek Node.js 示例](https://api-docs.deepseek.com/api_samples/chat_nodejs/)
+
+### Mem0 长期记忆
+
+Mem0 不是只增加一个 import：它接管长期记忆的写入和检索，PostgreSQL 继续保存会话、消息和审计事件。每次模型调用前，`Mem0MemoryStore` 使用由可信 `ActorContext` 推导出的 `tenant:{tenantId}:actor:{actorId}` 作为 `user_id` 过滤器检索记忆；每次模型回复后，它把本轮用户和助手消息发送到 Mem0，由 Mem0 提取长期记忆。返回结果还必须同时匹配写入时的 `tenantId` 与 `actorId` 元数据，才可以进入提示词。
+
+配置后，聊天内容会发送到 Mem0 Platform，因此请先确认其数据处理政策符合你的产品与用户授权要求。`MEM0_API_KEY` 只放在 `.env`，不要提交。若不设置该变量，应用默认继续使用 PostgreSQL 记忆存储；设置 `MEMORY_PROVIDER=mem0` 但未设置 API key 时，应用会拒绝启动，避免静默降级。
 
 验证服务：
 

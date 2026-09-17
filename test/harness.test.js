@@ -10,6 +10,7 @@ import {
   IntegrityError,
   ConnectionCatalog,
   LocalAnalysisWorker,
+  Mem0MemoryStore,
   ModelAdapter,
   OpenAICompatibleModelAdapter,
   PluginRegistry,
@@ -209,6 +210,72 @@ test('obvious credential content is rejected before it can enter tenant memory',
     sourceId: 'chat-1',
     content: 'api key: sk-12345678901234567890',
   }), ValidationError);
+});
+
+test('Mem0 memory scopes reads and writes to the actor-derived tenant identity', async () => {
+  const calls = { adds: [], searches: [] };
+  const client = {
+    async add(messages, options) {
+      calls.adds.push({ messages, options });
+      return [];
+    },
+    async search(query, options) {
+      calls.searches.push({ query, options });
+      return {
+        results: [
+          {
+            id: 'alice-memory',
+            memory: 'Alice prefers Shanghai revenue reports.',
+            userId: options.filters.user_id,
+            metadata: { tenantId: 'tenant-alice', actorId: 'alice' },
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            id: 'mismatched-memory',
+            memory: 'Must not be used.',
+            userId: options.filters.user_id,
+            metadata: { tenantId: 'tenant-bob', actorId: 'bob' },
+          },
+        ],
+      };
+    },
+  };
+  const store = new Mem0MemoryStore({ client });
+  const alice = createActorContext({ actorId: 'alice', tenantId: 'tenant-alice', scopes: ['agent:run'] });
+
+  await store.recordTurn(alice, {
+    sessionId: 'session-a',
+    turnId: 'turn-a',
+    userMessage: 'Please remember I prefer Shanghai reports.',
+    assistantMessage: 'I will remember that preference.',
+  });
+  const memories = await store.retrieve(alice, 'Which reports do I prefer?');
+
+  assert.deepEqual(memories.map((memory) => memory.id), ['alice-memory']);
+  assert.equal(calls.adds[0].options.userId, 'tenant:tenant-alice:actor:alice');
+  assert.deepEqual(calls.adds[0].options.metadata, {
+    tenantId: 'tenant-alice', actorId: 'alice', turnId: 'turn-a', source: 'agent-turn',
+  });
+  assert.deepEqual(calls.searches[0].options.filters, { user_id: 'tenant:tenant-alice:actor:alice' });
+});
+
+test('a model turn records the completed exchange when the memory adapter supports Mem0 writes', async () => {
+  const { harness, eventLog, alice } = seed();
+  const recorded = [];
+  harness.memoryStore = {
+    async retrieve() { return []; },
+    async recordTurn(actor, turn) { recorded.push({ actor, turn }); },
+  };
+  const sessionId = harness.createSession(alice);
+
+  await harness.runModelTurn(alice, { sessionId, userMessage: 'Remember that I prefer concise reports.' });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].actor.tenantId, 'tenant-alice');
+  assert.equal(recorded[0].turn.sessionId, sessionId);
+  assert.equal(recorded[0].turn.userMessage, 'Remember that I prefer concise reports.');
+  assert.match(recorded[0].turn.assistantMessage, /Remember that I prefer concise reports/);
+  assert.equal(eventLog.list(alice, sessionId).some((event) => event.type === 'memory.recorded'), true);
 });
 
 function signProfile(profile, privateKey) {

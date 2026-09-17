@@ -142,7 +142,17 @@ export class AgentHarness {
     await this.eventLog.append(actor, { sessionId, turnId, type: 'user.message', payload: { stepId, content: userMessage } });
 
     try {
-      const memories = await this.memoryStore.retrieve(actor, userMessage);
+      let memories = [];
+      try {
+        memories = await this.memoryStore.retrieve(actor, userMessage);
+      } catch (memoryError) {
+        await this.eventLog.append(actor, {
+          sessionId,
+          turnId,
+          type: 'memory.retrieval.failed',
+          payload: { stepId, provider: this.memoryStore.constructor.name, reason: memoryError.name },
+        });
+      }
       const prompt = this.promptAssembler.compose(actor, { userMessage, memories });
       await this.eventLog.append(actor, {
         sessionId,
@@ -163,6 +173,29 @@ export class AgentHarness {
         type: 'assistant.message',
         payload: { stepId, content: response.message, provider: response.provider },
       });
+      if (typeof this.memoryStore.recordTurn === 'function') {
+        try {
+          await this.memoryStore.recordTurn(actor, {
+            sessionId,
+            turnId,
+            userMessage,
+            assistantMessage: response.message,
+          });
+          await this.eventLog.append(actor, {
+            sessionId,
+            turnId,
+            type: 'memory.recorded',
+            payload: { stepId, provider: this.memoryStore.constructor.name },
+          });
+        } catch (memoryError) {
+          await this.eventLog.append(actor, {
+            sessionId,
+            turnId,
+            type: 'memory.record.failed',
+            payload: { stepId, provider: this.memoryStore.constructor.name, reason: memoryError.name },
+          });
+        }
+      }
       await this.eventLog.append(actor, { sessionId, turnId, type: 'step.ended', payload: { stepId, status: 'completed' } });
       await this.eventLog.append(actor, { sessionId, turnId, type: 'turn.ended', payload: { status: 'completed' } });
       return Object.freeze({ turnId, stepId, message: response.message, memoryIds: prompt.memoryIds });

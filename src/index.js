@@ -5,6 +5,7 @@ export { AgentHarness } from './harness.js';
 export { PluginRegistry } from './plugins.js';
 export { TenantStore } from './tenant-store.js';
 export { TenantMemoryStore } from './memory-store.js';
+export { Mem0MemoryStore } from './mem0-memory-store.js';
 export { PromptAssembler } from './prompt.js';
 export { ModelAdapter } from './model-adapter.js';
 export { LocalAnalysisWorker } from './local-worker.js';
