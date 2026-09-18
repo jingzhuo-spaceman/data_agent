@@ -259,23 +259,37 @@ test('Mem0 memory scopes reads and writes to the actor-derived tenant identity',
   assert.deepEqual(calls.searches[0].options.filters, { user_id: 'tenant:tenant-alice:actor:alice' });
 });
 
-test('a model turn records the completed exchange when the memory adapter supports Mem0 writes', async () => {
+test('a Mem0-backed model turn keeps session history locally while writing long-term memory to Mem0', async () => {
   const { harness, eventLog, alice } = seed();
-  const recorded = [];
-  harness.memoryStore = {
-    async retrieve() { return []; },
-    async recordTurn(actor, turn) { recorded.push({ actor, turn }); },
-  };
+  const calls = { adds: [] };
+  harness.memoryStore = new Mem0MemoryStore({
+    client: {
+      async search() { return { results: [] }; },
+      async add(messages, options) {
+        calls.adds.push({ messages, options });
+        return [];
+      },
+    },
+  });
   const sessionId = harness.createSession(alice);
 
   await harness.runModelTurn(alice, { sessionId, userMessage: 'Remember that I prefer concise reports.' });
 
-  assert.equal(recorded.length, 1);
-  assert.equal(recorded[0].actor.tenantId, 'tenant-alice');
-  assert.equal(recorded[0].turn.sessionId, sessionId);
-  assert.equal(recorded[0].turn.userMessage, 'Remember that I prefer concise reports.');
-  assert.match(recorded[0].turn.assistantMessage, /Remember that I prefer concise reports/);
-  assert.equal(eventLog.list(alice, sessionId).some((event) => event.type === 'memory.recorded'), true);
+  const events = eventLog.list(alice, sessionId);
+  assert.deepEqual(events
+    .filter((event) => event.type === 'user.message' || event.type === 'assistant.message')
+    .map((event) => event.type), ['user.message', 'assistant.message']);
+  assert.equal(events.find((event) => event.type === 'user.message').payload.content, 'Remember that I prefer concise reports.');
+  assert.match(events.find((event) => event.type === 'assistant.message').payload.content, /Remember that I prefer concise reports/);
+  assert.equal(events.some((event) => event.type === 'memory.recorded'), true);
+
+  assert.equal(calls.adds.length, 1);
+  assert.deepEqual(calls.adds[0].messages, [
+    { role: 'user', content: 'Remember that I prefer concise reports.' },
+    { role: 'assistant', content: 'Processed Remember that I prefer concise reports.' },
+  ]);
+  assert.equal(calls.adds[0].options.userId, 'tenant:tenant-alice:actor:alice');
+  assert.equal(calls.adds[0].options.runId, sessionId);
 });
 
 function signProfile(profile, privateKey) {

@@ -56,8 +56,9 @@ export APP_ENV=development
 export MODEL_API_KEY='your-provider-api-key'
 export MODEL_BASE_URL='https://api.deepseek.com'
 export MODEL_NAME='deepseek-chat'
-# Optional: enable Mem0 Platform for long-term memory extraction and semantic recall.
-export MEMORY_PROVIDER='mem0'
+# PostgreSQL always stores sessions, messages, and audit events. Enable Mem0
+# only as the long-term memory layer for extraction and semantic recall.
+export LONG_TERM_MEMORY_PROVIDER='mem0'
 export MEM0_API_KEY='your-mem0-platform-api-key'
 npm run migrate
 npm run seed:dev
@@ -66,7 +67,7 @@ npm start
 
 服务默认仅监听 `127.0.0.1:3000`。浏览器打开 `http://127.0.0.1:3000` 可输入问题；`POST /api/agent/messages` 会依次执行当前租户的记忆检索、提示词组装和模型请求，并持久化 Turn/Step 事件。该输入接口仅在 `APP_ENV=development` 下可用，不能替代生产认证或用户数据 API。
 
-`npm run seed:dev` 会幂等创建三个开发租户：Alice、Bob、Carol。聊天页右上角的租户选择器会在这三个隔离空间间切换；会话和审计事件始终写入 PostgreSQL。未配置 Mem0 时，应用继续从 PostgreSQL 检索旧记忆；配置 `MEMORY_PROVIDER=mem0` 与 `MEM0_API_KEY` 后，长期记忆的提取和语义检索改由 Mem0 Platform 处理。
+`npm run seed:dev` 会幂等创建三个开发租户：Alice、Bob、Carol。聊天页右上角的租户选择器会在这三个隔离空间间切换；会话、用户消息、助手消息和审计事件始终写入 PostgreSQL。`LONG_TERM_MEMORY_PROVIDER=postgres` 时，长期记忆也保存在 PostgreSQL；配置 `LONG_TERM_MEMORY_PROVIDER=mem0` 与 `MEM0_API_KEY` 后，长期记忆的提取和语义检索改由 Mem0 Platform 处理。旧变量 `MEMORY_PROVIDER` 仍可使用，但仅作为新变量的兼容别名。
 
 聊天页左侧会显示当前租户拥有的历史会话。刷新页面后，应用通过 `GET /api/agent/sessions` 加载会话列表，并通过 `GET /api/agent/sessions/{sessionId}/events` 回放用户和助手消息；两个接口均按当前租户和主体检查 Session 归属。
 
@@ -76,9 +77,9 @@ npm start
 
 ### Mem0 长期记忆
 
-Mem0 不是只增加一个 import：它接管长期记忆的写入和检索，PostgreSQL 继续保存会话、消息和审计事件。每次模型调用前，`Mem0MemoryStore` 使用由可信 `ActorContext` 推导出的 `tenant:{tenantId}:actor:{actorId}` 作为 `user_id` 过滤器检索记忆；每次模型回复后，它把本轮用户和助手消息发送到 Mem0，由 Mem0 提取长期记忆。返回结果还必须同时匹配写入时的 `tenantId` 与 `actorId` 元数据，才可以进入提示词。
+Mem0 不是数据库的替代品：PostgreSQL 始终保存可回放的会话、消息和审计事件；Mem0 只接管长期记忆的写入和检索。每次模型调用前，`Mem0MemoryStore` 使用由可信 `ActorContext` 推导出的 `tenant:{tenantId}:actor:{actorId}` 作为 `user_id` 过滤器检索记忆；每次模型回复后，它把本轮用户和助手消息发送到 Mem0，由 Mem0 提取长期记忆。返回结果还必须同时匹配写入时的 `tenantId` 与 `actorId` 元数据，才可以进入提示词。
 
-配置后，聊天内容会发送到 Mem0 Platform，因此请先确认其数据处理政策符合你的产品与用户授权要求。`MEM0_API_KEY` 只放在 `.env`，不要提交。若不设置该变量，应用默认继续使用 PostgreSQL 记忆存储；设置 `MEMORY_PROVIDER=mem0` 但未设置 API key 时，应用会拒绝启动，避免静默降级。
+配置后，聊天内容会发送到 Mem0 Platform，因此请先确认其数据处理政策符合你的产品与用户授权要求。`MEM0_API_KEY` 只放在 `.env`，不要提交。若不设置该变量，应用默认继续使用 PostgreSQL 长期记忆；设置 `LONG_TERM_MEMORY_PROVIDER=mem0`（或旧变量 `MEMORY_PROVIDER=mem0`）但未设置 API key 时，应用会拒绝启动，避免静默降级。
 
 验证服务：
 

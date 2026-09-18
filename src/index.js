@@ -16,6 +16,7 @@ export { TenantObjectStoragePolicy } from './object-storage-policy.js';
 export { PostgresDatabase, requireDatabaseUrl } from './postgres.js';
 export { OpenAICompatibleModelAdapter, modelAdapterFromEnvironment } from './openai-compatible-model.js';
 export { PostgresMemoryStore, PostgresSessionEventLog, TenantRegistry } from './postgres-state.js';
+export { longTermMemoryProviderFromEnvironment } from './storage-configuration.js';
 export { SignedProfileLoader, canonicalProfilePayload } from './profile-loader.js';
 export { dataAnalysisPlugin, dataCatalogPlugin } from './tools.js';
 export { AuthorizationError, CapabilityError, IntegrityError, ValidationError } from './errors.js';

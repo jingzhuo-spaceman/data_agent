@@ -9,6 +9,7 @@ import { CapabilityBroker } from './capability-broker.js';
 import { TenantStore } from './tenant-store.js';
 import { Mem0MemoryStore } from './mem0-memory-store.js';
 import { PostgresMemoryStore, PostgresSessionEventLog, TenantRegistry } from './postgres-state.js';
+import { longTermMemoryProviderFromEnvironment } from './storage-configuration.js';
 
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -20,18 +21,16 @@ const modelAdapter = modelAdapterFromEnvironment();
 const tenantRegistry = new TenantRegistry({ database });
 const eventLog = new PostgresSessionEventLog({ database });
 const resourceStore = new TenantStore();
-const memoryProvider = (process.env.MEMORY_PROVIDER ?? (process.env.MEM0_API_KEY ? 'mem0' : 'postgres')).toLowerCase();
-const memoryStore = memoryProvider === 'mem0'
+const longTermMemoryProvider = longTermMemoryProviderFromEnvironment();
+const longTermMemoryStore = longTermMemoryProvider === 'mem0'
   ? new Mem0MemoryStore({ apiKey: process.env.MEM0_API_KEY, host: process.env.MEM0_BASE_URL })
-  : memoryProvider === 'postgres'
-    ? new PostgresMemoryStore({ database })
-    : (() => { throw new Error('MEMORY_PROVIDER must be either mem0 or postgres'); })();
+  : new PostgresMemoryStore({ database });
 const harness = new AgentHarness({
   eventLog,
   capabilityBroker: new CapabilityBroker({ resourceStore, allowedTools: new Set() }),
   pluginRegistry: new PluginRegistry({ allowUnverifiedPlugins: true }),
   resourceStore,
-  memoryStore,
+  memoryStore: longTermMemoryStore,
   promptAssembler: new PromptAssembler({
     systemInstructions: 'You are a data analysis assistant. Only use the current tenant context and never expose secrets.',
   }),
@@ -93,7 +92,7 @@ function applicationHtml() {
 <title>Data Agent</title><style>
 body{margin:0;background:#f4f6f8;color:#17212b;font:15px/1.5 system-ui,sans-serif}.app{max-width:1050px;margin:0 auto;padding:28px 20px}.top{display:flex;gap:18px;justify-content:space-between;align-items:center;border-bottom:1px solid #ccd3d8;padding-bottom:14px}.state{color:#56616b;font-size:13px}.workspace{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:600px}.history{border-right:1px solid #ccd3d8;padding:16px 14px 16px 0}.new{width:100%;margin-bottom:12px}.sessions{display:flex;flex-direction:column;gap:4px}.session{width:100%;border:0;border-left:3px solid transparent;background:transparent;text-align:left;padding:8px;color:#34414b;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session:hover,.session.active{background:#e4ecee;border-left-color:#177e89}.chat{padding-left:20px;display:flex;flex-direction:column}.messages{flex:1;min-height:420px;padding:12px 0}.message{padding:12px 14px;margin:10px 0;border:1px solid #d5dce1;border-radius:6px;background:#fff;white-space:pre-wrap}.user{border-left:4px solid #177e89}.assistant{border-left:4px solid #c58b28}.error{border-left:4px solid #bd3a3a}.composer{display:flex;gap:8px;border-top:1px solid #ccd3d8;padding-top:16px}textarea{flex:1;min-height:52px;resize:vertical;padding:10px;border:1px solid #aeb8bf;border-radius:4px;font:inherit}button{align-self:flex-end;background:#177e89;color:#fff;border:0;border-radius:4px;padding:11px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.6;cursor:wait}@media(max-width:700px){.app{padding:18px 12px}.workspace{grid-template-columns:1fr}.history{border-right:0;border-bottom:1px solid #ccd3d8;padding-right:0}.chat{padding-left:0}.sessions{max-height:150px;overflow:auto}}</style></head>
 <body><main class="app"><div class="top"><div><strong>Data Agent</strong><div class="state" id="state">Checking model configuration</div></div><label class="state">租户 <select id="tenant"></select></label><a href="/health">Health</a></div><div class="workspace"><aside class="history"><button class="new" id="new" type="button">新对话</button><div class="sessions" id="sessions"></div></aside><section class="chat"><section class="messages" id="messages"></section><form class="composer" id="composer"><textarea id="message" placeholder="输入数据分析问题" required></textarea><button id="send" type="submit">发送</button></form></section></div></main>
-<script>const box=document.querySelector('#messages'),form=document.querySelector('#composer'),input=document.querySelector('#message'),send=document.querySelector('#send'),state=document.querySelector('#state'),tenant=document.querySelector('#tenant'),sessions=document.querySelector('#sessions'),newButton=document.querySelector('#new');let sessionId;function headers(){return{'content-type':'application/json','x-dev-tenant-id':tenant.value}}function add(role,text){const e=document.createElement('div');e.className='message '+role;e.textContent=text;box.append(e)}function render(events){box.replaceChildren();events.filter(e=>e.type==='user.message'||e.type==='assistant.message').forEach(e=>add(e.type==='user.message'?'user':'assistant',e.content));box.lastElementChild?.scrollIntoView({block:'end'})}async function refreshSessions(){const r=await fetch('/api/agent/sessions',{headers:headers()});const data=await r.json();sessions.replaceChildren();data.forEach(item=>{const b=document.createElement('button');b.className='session'+(item.sessionId===sessionId?' active':'');b.type='button';b.title=item.preview||'空会话';b.textContent=item.preview||'新对话';b.onclick=()=>loadSession(item.sessionId);sessions.append(b)})}async function loadSession(id){const r=await fetch('/api/agent/sessions/'+id+'/events',{headers:headers()});if(!r.ok)return;sessionId=id;render(await r.json());refreshSessions()}async function config(){const r=await fetch('/api/agent/config');const d=await r.json();state.textContent=(d.modelConfigured?'模型已连接':'未配置 MODEL_API_KEY 或 MODEL_BASE_URL')+' · 记忆: '+d.memoryProvider;const t=await fetch('/api/development/tenants');const tenants=await t.json();tenants.forEach(x=>{const o=document.createElement('option');o.value=x.id;o.textContent=x.displayName;tenant.append(o)});refreshSessions()}config();tenant.addEventListener('change',()=>{sessionId=undefined;box.replaceChildren();refreshSessions()});newButton.onclick=()=>{sessionId=undefined;box.replaceChildren();input.focus()};form.addEventListener('submit',async e=>{e.preventDefault();const message=input.value.trim();if(!message)return;add('user',message);input.value='';send.disabled=true;try{const r=await fetch('/api/agent/messages',{method:'POST',headers:headers(),body:JSON.stringify({message,sessionId})});const d=await r.json();if(!r.ok)throw new Error(d.error||'请求失败');sessionId=d.sessionId;add('assistant',d.message);refreshSessions()}catch(err){add('error',err.message)}finally{send.disabled=false;input.focus()}});</script></body></html>`;
+<script>const box=document.querySelector('#messages'),form=document.querySelector('#composer'),input=document.querySelector('#message'),send=document.querySelector('#send'),state=document.querySelector('#state'),tenant=document.querySelector('#tenant'),sessions=document.querySelector('#sessions'),newButton=document.querySelector('#new');let sessionId;function headers(){return{'content-type':'application/json','x-dev-tenant-id':tenant.value}}function add(role,text){const e=document.createElement('div');e.className='message '+role;e.textContent=text;box.append(e)}function render(events){box.replaceChildren();events.filter(e=>e.type==='user.message'||e.type==='assistant.message').forEach(e=>add(e.type==='user.message'?'user':'assistant',e.content));box.lastElementChild?.scrollIntoView({block:'end'})}async function refreshSessions(){const r=await fetch('/api/agent/sessions',{headers:headers()});const data=await r.json();sessions.replaceChildren();data.forEach(item=>{const b=document.createElement('button');b.className='session'+(item.sessionId===sessionId?' active':'');b.type='button';b.title=item.preview||'空会话';b.textContent=item.preview||'新对话';b.onclick=()=>loadSession(item.sessionId);sessions.append(b)})}async function loadSession(id){const r=await fetch('/api/agent/sessions/'+id+'/events',{headers:headers()});if(!r.ok)return;sessionId=id;render(await r.json());refreshSessions()}async function config(){const r=await fetch('/api/agent/config');const d=await r.json();state.textContent=(d.modelConfigured?'模型已连接':'未配置 MODEL_API_KEY 或 MODEL_BASE_URL')+' · 会话: '+d.sessionStore+' · 长期记忆: '+d.longTermMemoryProvider;const t=await fetch('/api/development/tenants');const tenants=await t.json();tenants.forEach(x=>{const o=document.createElement('option');o.value=x.id;o.textContent=x.displayName;tenant.append(o)});refreshSessions()}config();tenant.addEventListener('change',()=>{sessionId=undefined;box.replaceChildren();refreshSessions()});newButton.onclick=()=>{sessionId=undefined;box.replaceChildren();input.focus()};form.addEventListener('submit',async e=>{e.preventDefault();const message=input.value.trim();if(!message)return;add('user',message);input.value='';send.disabled=true;try{const r=await fetch('/api/agent/messages',{method:'POST',headers:headers(),body:JSON.stringify({message,sessionId})});const d=await r.json();if(!r.ok)throw new Error(d.error||'请求失败');sessionId=d.sessionId;add('assistant',d.message);refreshSessions()}catch(err){add('error',err.message)}finally{send.disabled=false;input.focus()}});</script></body></html>`;
 }
 
 const server = http.createServer(async (request, response) => {
@@ -114,7 +113,12 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === 'GET' && request.url === '/api/agent/config') {
-    sendJson(response, 200, { modelConfigured: modelAdapter !== null, memoryProvider, developmentMode: process.env.APP_ENV === 'development' });
+    sendJson(response, 200, {
+      modelConfigured: modelAdapter !== null,
+      sessionStore: 'postgres',
+      longTermMemoryProvider,
+      developmentMode: process.env.APP_ENV === 'development',
+    });
     return;
   }
 
